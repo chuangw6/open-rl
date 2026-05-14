@@ -77,8 +77,8 @@ In your **first terminal session**, start the vLLM sampler on GPU 0:
 
 ```bash
 export CUDA_VISIBLE_DEVICES=0
-export BASE_MODEL=google/gemma-4-e2b
-export VLLM_ARCHITECTURE_OVERRIDE=Gemma4ForCausalLM
+export BASE_MODEL=Qwen/Qwen3-4B-Instruct-2507
+make vllm
 
 # Recommended to avoid Hugging Face rate limits
 # export HF_TOKEN="your_huggingface_token"
@@ -91,7 +91,7 @@ In a **second terminal session**, start the Open-RL gateway and trainer on GPU 1
 
 ```bash
 export CUDA_VISIBLE_DEVICES=1
-export BASE_MODEL=google/gemma-4-e2b
+export BASE_MODEL=Qwen/Qwen3-4B-Instruct-2507
 export SAMPLING_BACKEND=vllm
 make server
 ```
