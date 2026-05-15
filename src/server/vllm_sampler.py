@@ -73,6 +73,8 @@ async def lifespan(app: FastAPI):
     if arch_override:
       hf_overrides["architectures"] = [arch_override]
 
+    print(f"[vLLM Debug] VLLM_MAX_MODEL_LEN read as: {os.getenv('VLLM_MAX_MODEL_LEN')}")
+
     engine_kwargs = {
       "model": model_name,
       "enable_lora": True,
