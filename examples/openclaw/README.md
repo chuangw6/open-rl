@@ -1,8 +1,6 @@
-# Friction Log - Open-RL & OpenClaw-Tinker Setup
+# Comprehensive Guide: Self-Hosted Continuous Learning Stack
 
-This log documents the difficulties, confusion, and issues encountered during the process of setting up the Open-RL infrastructure and running the `openclaw-tinker` project on a local VM.
-
-**Goal**: Set up the Open-RL infrastructure for the `openclaw-tinker` project to enable Reinforcement Learning training using the Tinker API on a local VM.
+This guide walks you through setting up the complete stack (**Open-RL**, **OpenClaw-Tinker**, and **OpenClaw**) to observe and verify that continuous learning actually works in a self-hosted environment.
 
 ## Architecture Overview
 
@@ -44,55 +42,188 @@ graph TD
 7.  **Continuous Learning Loop**: The Open-RL Server pushes the newly updated weights back to the **vLLM Sampler**. The next batch of requests (starting again at Step 1) will now be served by this smarter model, creating an ongoing cycle of improvement.
 
 
-## 1. Environment Variable "Trap" with vLLM Override
+<details>
+<summary><b>Concept: How the Continuous Learning Loop Works</b></summary>
 
-*   **Friction**: The local setup guide for Gemma 4 required setting `export VLLM_ARCHITECTURE_OVERRIDE=Gemma4ForCausalLM`. When switching to the Qwen model, forgetting to unset this variable caused vLLM to crash with a cryptic `AttributeError: 'Qwen3Config' object has no attribute 'hidden_activation'`.
-*   **Impact**: Wasted time troubleshooting why Qwen wouldn't load, thinking it was a model compatibility issue rather than a stale environment variable.
-*   **Suggestion**: The setup scripts or documentation should strongly emphasize unsetting or scoping these overrides to specific runs.
+Here is the step-by-step cycle of how the system improves itself over time:
 
-## 2. Disk Space Exhaustion during Installation & Compilation
+1. **You Chat (The Experience)**: You send a message on WhatsApp. The model (Student) generates a response and sends it back to you.
+2. **The System Waits (The Buffering)**: The system cannot score your message yet. It puts it in a temporary buffer and waits for your reply.
+3. **You Reply (The Trigger)**: You send a second message. This triggers the **Scoring** of your *first* message. The Teacher model reads both turns and assigns a score (+1, -1, or 0).
+4. **Pushing to the Queue (Filling the Bucket)**: This scored conversation turn is pushed into a **Queue**. Neural networks need a batch of examples (default: 4) to make a stable learning step.
+5. **The Batch is Full (Training Time)**: Once the queue has 4 scored samples, the background trainer pulls them all out at once.
+6. **Gradient Update (The Learning)**: The trainer runs a mathematical update using those 4 samples to improve the **LoRA weights** in `/tmp/open-rl/peft/`.
+7. **The Hot-Reload**: Once weights are updated, the system tells the **vLLM Sampler** to reload that LoRA adapter.
+8. **The Cycle Repeats**: The very next message you send will be processed by the **newly updated, smarter model**!
 
-*   **Friction**: The VM disk ran out of space multiple times. First, during the installation of large wheels like `flashinfer-cubin` (which is a dependency of `sglang`), and second, when the Triton compiler attempted to write cache files during model execution.
-*   **Impact**: Repeated failed installations and runtime crashes with `No space left on device` (os error 28).
-*   **Suggestion**: Document the total disk space required for a full local setup (including large model caches and compiler caches). Suggest cleaning the `uv` cache aggressively or sizing VMs with larger disks (at least 50GB+) up front.
+</details>
 
-## 3. Missing `adapter_config.json` from PEFT Save
+---
 
-*   **Friction**: The PEFT library's `save_pretrained` method saved the `adapter_model.safetensors` file but failed to generate the corresponding `adapter_config.json` in the expected directory. This caused the vLLM sampler to fail with a `LoRAAdapterNotFoundError` when it tried to load the adapter.
-*   **Impact**: Blocked the core functionality of sampling from the trained model.
-*   **Resolution**: We had to manually create the JSON file as a workaround and later proposed code modifications to handle this automatically.
+## Part 0: System Packages & Tools
 
-## 4. Undocumented `tinker` SDK Dependency
+Before setting up the repositories, ensure your system has the required base packages and tools installed.
 
-*   **Friction**: The `openclaw-tinker` project imported `tinker`, but this package was not listed anywhere in the `requirements.txt` file provided in the repository.
-*   **Impact**: Caused `ModuleNotFoundError: No module named 'tinker'` when attempting to run the script.
-*   **Resolution**: We had to dig into the `open-rl` repository's examples to find that `tinker==0.18.2` was the expected version to install.
-
-## 5. `uv` Incompatibility with Editable Git Requirements
-
-*   **Friction**: The `requirements.txt` file contained an editable git install (`-e git+https://github.com/...`). The `uv` tool, which was recommended for setup, failed with `error: Unsupported editable requirement in requirements.txt`.
-*   **Impact**: Blocked the smooth "one-command" setup flow that `uv` usually provides.
-*   **Resolution**: Had to either switch back to standard `pip` (which hit OS environment blocks) or manually edit the file to remove the `-e` flag.
-
-## 6. Multi-Turn Dependency for Sample Collection
-
-*   **Friction**: The `combine` method in `openclaw-tinker` quietly dropped samples if they did not have a `next_state` (i.e., if the session was closed on the first turn).
-*   **Impact**: Confusion as to why sending a simple `curl` request resulted in a successful response but the server's rollout queue remained at `0/16` (where 16 is the `batch_size` specified in your command line argument, overriding the default of 4 in [config.py](../../../OpenClaw-RL/openclaw-tinker/config.py#L34)).
-*   **Insight**: Learned that in this specific RL implementation, Turn N is only evaluated and committed to the training batch when Turn N+1 is received. This is a non-obvious behavior that should be explicitly documented for new users.
-
-## 7. Minimal Working Dependencies
-
-To bypass the issues with the full `requirements.txt` (like disk space and compilation errors), we identified that `openclaw-tinker` can run with a minimal set of packages.
-
-Here are the packages we installed to make it work:
-- `fastapi` (for the API server)
-- `uvicorn` (to run the API server)
-- `transformers` (for tokenization)
-- `torch` (for data formatting)
-- `tinker==0.18.2` (SDK, found in `open-rl/examples/pyproject.toml`)
-- `httpx` (needed for the Google Chat bridge)
-
-Command used:
 ```bash
+# Update package list
+sudo apt update
+
+# Install Git, Python3, Pip, and build tools
+sudo apt install -y git python3 python3-pip build-essential
+
+# Install 'uv' (Fast Python package installer used by Open-RL)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+# Reload shell or run to update PATH:
+source $HOME/.local/bin/env
+```
+
+---
+
+## Part 1: Node.js Environment
+
+Ensure you use `nvm` (Node Version Manager) to manage Node versions and avoid permission issues.
+
+```bash
+# Install NVM if not present
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
+source ~/.profile
+
+# Install and use Node 22
+nvm install 22
+nvm use 22
+
+# Enable Corepack to get pnpm
+corepack enable
+```
+
+---
+
+## Part 2: Set up Open-RL (vLLM Sampler & Server)
+
+This component runs the model and provides the API.
+
+### 1. Clone and Setup
+```bash
+git clone https://github.com/chuangw/open-rl.git ~/open-rl
+cd ~/open-rl
+
+# Install dependencies using uv
+uv sync --extra vllm
+```
+
+### 2. Start vLLM Sampler (Terminal 1)
+Set environment variables to handle large prompts and avoid OOM:
+```bash
+cd ~/open-rl
+export CUDA_VISIBLE_DEVICES=0
+export BASE_MODEL=Qwen/Qwen3-4B-Instruct-2507
+export VLLM_MAX_MODEL_LEN=40000
+export VLLM_GPU_MEMORY_UTILIZATION=0.75
+
+make vllm
+```
+
+### 3. Start Open-RL Server (Terminal 2)
+```bash
+cd ~/open-rl
+export CUDA_VISIBLE_DEVICES=1
+export BASE_MODEL=Qwen/Qwen3-4B-Instruct-2507
+export SAMPLING_BACKEND=vllm
+
+make server
+```
+*The server will be available at `http://127.0.0.1:9003`.*
+
+---
+
+## Part 3: Set up OpenClaw-Tinker (Orchestrator)
+
+This component acts as a proxy, collects training samples, and scores turns.
+
+### 1. Clone and Setup
+```bash
+git clone https://github.com/chuangw/OpenClaw-RL.git ~/OpenClaw-RL
+cd ~/OpenClaw-RL
+
+# Create and activate virtual environment
+python3 -m venv .venv
+source .venv/bin/activate
+
+# Install MINIMAL dependencies to avoid overkilling disk space
+# (As identified in open-rl/examples/openclaw/README.md)
 uv pip install fastapi uvicorn transformers torch httpx tinker==0.18.2
 ```
+
+### 3. Start Orchestrator (Terminal 3)
+```bash
+cd openclaw-tinker
+export TINKER_API_KEY="self-hosted"
+python3 run.py --method combine --model-name Qwen/Qwen3-4B-Instruct-2507 --batch-size 4
+```
+*The orchestrator will be available at `http://0.0.0.0:30000`.*
+
+---
+
+## Part 4: Set up OpenClaw (Client & WhatsApp)
+
+This is the user-facing agent interface.
+
+### 1. Clone and Build
+```bash
+git clone https://github.com/<your-fork>/openclaw.git ~/openclaw
+cd ~/openclaw
+pnpm install
+pnpm build && pnpm ui:build
+```
+
+### 2. Install Plugin
+```bash
+mkdir -p extensions
+cp -r ~/OpenClaw-RL/extensions/rl-training-headers ./extensions/rl-training-headers
+```
+
+### 3. Configure `openclaw.json`
+Create `~/.openclaw/openclaw.json` to point to the orchestrator:
+```json
+{
+  "models": {
+    "providers": {
+      "openclaw-rl": {
+        "baseUrl": "http://localhost:30000/v1",
+        "apiKey": "no-auth-needed",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "qwen3-4b-lora",
+            "name": "Qwen3 4B (OpenClaw-RL LoRA)",
+            "reasoning": true,
+            "contextWindow": 32768,
+            "maxTokens": 8192
+          }
+        ]
+      }
+    }
+  },
+  "plugins": {
+    "entries": {
+      "rl-training-headers": { "enabled": true }
+    }
+  }
+}
+EOF
+```
+
+### 4. Login and Run (Terminal 4)
+```bash
+~/.npm-global/bin/openclaw channels login --channel whatsapp
+# Scan QR code
+
+node scripts/run-node.mjs gateway --allow-unconfigured
+```
+
+---
+
+## Known Issues & Workarounds
+- **Missing `adapter_config.json`**: If vLLM fails to load a LoRA adapter due to missing config, manually create it in the reported `/tmp/...` directory with valid JSON.
+- **Corrupted Tensors**: If a safetensors file fails to load, copy a valid `1013M` file from another session folder in `/tmp/open-rl/peft/`.
+- **Multi-Turn Dependency**: Turn N is only committed to the queue when Turn N+1 is received. Send a follow-up message to see the queue increase!
