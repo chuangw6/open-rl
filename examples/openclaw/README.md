@@ -68,8 +68,8 @@ Before setting up the repositories, ensure your system has the required base pac
 # Update package list
 sudo apt update
 
-# Install Git, Python3, Pip, and build tools
-sudo apt install -y git python3 python3-pip build-essential
+# Install Git, Python3, Pip, venv, and build tools
+sudo apt install -y git python3 python3-pip python3-venv build-essential
 
 # Install 'uv' (Fast Python package installer used by Open-RL)
 curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -104,7 +104,7 @@ This component runs the model and provides the API.
 
 ### 1. Clone and Setup
 ```bash
-git clone https://github.com/chuangw/open-rl.git ~/open-rl
+git clone https://github.com/chuangw6/open-rl.git
 cd ~/open-rl
 
 # Install dependencies using uv
@@ -142,10 +142,10 @@ This component acts as a proxy, collects training samples, and scores turns.
 
 ### 1. Clone and Setup
 ```bash
-git clone https://github.com/chuangw/OpenClaw-RL.git ~/OpenClaw-RL
+git clone https://github.com/chuangw6/OpenClaw-RL.git
 cd ~/OpenClaw-RL
 
-# Create and activate virtual environment
+# Create and activate a virtual environment
 python3 -m venv .venv
 source .venv/bin/activate
 
@@ -157,7 +157,13 @@ uv pip install fastapi uvicorn transformers torch httpx tinker==0.18.2
 ### 3. Start Orchestrator (Terminal 3)
 ```bash
 cd openclaw-tinker
-export TINKER_API_KEY="self-hosted"
+
+# Open-RL Gateway URL
+export TINKER_BASE_URL=http://127.0.0.1:9003
+
+# Dummy API key for local gateway
+export TINKER_API_KEY=tml-dummy
+
 python3 run.py --method combine --model-name Qwen/Qwen3-4B-Instruct-2507 --batch-size 4
 ```
 *The orchestrator will be available at `http://0.0.0.0:30000`.*
@@ -170,8 +176,15 @@ This is the user-facing agent interface.
 
 ### 1. Clone and Build
 ```bash
-git clone https://github.com/<your-fork>/openclaw.git ~/openclaw
+git clone https://github.com/chuangw6/openclaw.git
 cd ~/openclaw
+
+# Load NVM and use Node 22 in this terminal session
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+nvm use 22
+corepack enable
+
 pnpm install
 pnpm build && pnpm ui:build
 ```
@@ -215,9 +228,14 @@ EOF
 
 ### 4. Login and Run (Terminal 4)
 ```bash
-~/.npm-global/bin/openclaw channels login --channel whatsapp
+# Add the whatsapp channel (this will download the whatsapp plugin from ClawHub)
+node scripts/run-node.mjs channels add --channel whatsapp
+
+# Run the login command from source
+node scripts/run-node.mjs channels login --channel whatsapp
 # Scan QR code
 
+# Start the gateway
 node scripts/run-node.mjs gateway --allow-unconfigured
 ```
 

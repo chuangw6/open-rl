@@ -154,26 +154,6 @@ class TrainerEngine:
       # Save the adapter weights
       self.peft_model.save_pretrained(save_path, selected_adapters=[adapter_id])
 
-      # --- FIX: Manually save adapter_config.json if missing ---
-      # PEFT often saves weights in a subdirectory named after the adapter_id
-      actual_save_path = os.path.join(save_path, adapter_id)
-      if not os.path.exists(actual_save_path):
-        actual_save_path = save_path  # Fallback if it saved directly in save_path
-
-      config_path = os.path.join(actual_save_path, "adapter_config.json")
-
-      if not os.path.exists(config_path):
-        print(f"[FIX] Manually writing adapter_config.json to {config_path}")
-        # Get the config object from the model
-        config = self.peft_model.peft_config[adapter_id]
-
-        # Convert the config object to a dictionary
-        config_dict = config.to_dict() if hasattr(config, "to_dict") else dict(config)
-
-        with open(config_path, "w") as f:
-          json.dump(config_dict, f, indent=2)
-      # ---------------------------------------------------------
-
       # Save minimal metadata
       metadata = {"model_id": adapter_id, "created_at": datetime.now().isoformat(), "timestamp": time.time()}
       if alias is not None:
